@@ -4,6 +4,9 @@ use crate::mem::{self, ManuallyDrop, MaybeUninit};
 use crate::slice::sort::shared::FreezeMarker;
 use crate::{intrinsics, ptr, slice};
 
+#[cfg(kani)]
+use verification_utils::*;
+
 // It's important to differentiate between SMALL_SORT_THRESHOLD performance for
 // small slices and small-sort performance sorting small sub-slices as part of
 // the main quicksort loop. For the former, testing showed that the
@@ -670,11 +673,7 @@ pub unsafe fn sort4_stable<T, F: FnMut(&T, &T) -> bool>(
 
     #[inline(always)]
     fn select<T>(cond: bool, if_true: *const T, if_false: *const T) -> *const T {
-        if cond {
-            if_true
-        } else {
-            if_false
-        }
+        if cond { if_true } else { if_false }
     }
 }
 
@@ -888,13 +887,74 @@ pub(crate) const fn has_efficient_in_place_swap<T>() -> bool {
 }
 
 #[cfg(kani)]
+mod verification_utils {
+    use super::*;
+
+    macro_rules! ptr_next_counts {
+        ($ptr:ident, [$($args:expr),*]) => { [$($ptr.wrapping_add($args)),*] };
+    }
+
+    pub(super) use ptr_next_counts;
+
+    pub fn is_less_over_approximation<T>(_: &T, _: &T) -> bool {
+        kani::any()
+    }
+
+    pub fn can_dereference_all<'a, I, T>(ptrs: I) -> bool
+    where
+        T: 'a,
+        I: IntoIterator<Item = &'a *const T>,
+    {
+        ptrs.into_iter().all(|ptr| kani::mem::can_dereference(*ptr))
+    }
+
+    pub fn can_write_all<'a, I, T>(ptrs: I) -> bool
+    where
+        T: 'a,
+        I: IntoIterator<Item = &'a *mut T>,
+    {
+        ptrs.into_iter().all(|ptr| kani::mem::can_write(*ptr))
+    }
+
+    pub fn non_overlapping<T>(ptr_1: *const T, ptr_2: *mut T, len: usize) -> bool {
+        (ptr_1 as isize).abs_diff(ptr_2 as isize) / mem::size_of::<T>() >= len
+    }
+}
+
+#[cfg(kani)]
 mod verification {
     use super::*;
 
     type VerifTy = usize;
 
     #[kani::proof]
+    fn check_sort4_stable() {
+        let mut generator_1 = kani::pointer_generator::<VerifTy, SMALL_SORT_GENERAL_SCRATCH_LEN>();
+        let mut generator_2 = kani::pointer_generator::<VerifTy, SMALL_SORT_GENERAL_SCRATCH_LEN>();
+
+        let v_base: *const VerifTy = generator_1.any_in_bounds().ptr;
+        let dst: *mut VerifTy = if kani::any() {
+            generator_1.any_in_bounds().ptr
+        } else {
+            generator_2.any_in_bounds().ptr
+        };
+
+        let v_base_ptrs = ptr_next_counts!(v_base, [0, 1, 2, 3]);
+        let dst_ptrs = ptr_next_counts!(dst, [0, 1, 2, 3]);
+
+        kani::assume(
+            can_dereference_all(&v_base_ptrs)
+                && can_write_all(&dst_ptrs)
+                && non_overlapping(v_base, dst, 4),
+        );
+
+        unsafe {
+            sort4_stable(v_base, dst, &mut is_less_over_approximation);
+        }
+    }
+
+    #[kani::proof]
     fn check_has_efficient_in_place_swap() {
-        has_efficient_in_place_swap::<VerifTy>();
+        let _ = has_efficient_in_place_swap::<VerifTy>();
     }
 }
