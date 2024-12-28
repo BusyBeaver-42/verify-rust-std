@@ -896,16 +896,33 @@ mod verification_utils {
 
     pub(super) use ptr_next_counts;
 
+    trait IntoConstPtr<T>: Copy {
+        fn into_const(self) -> *const T;
+    }
+
+    impl<T> IntoConstPtr<T> for *const T {
+        fn into_const(self) -> *const T {
+            self
+        }
+    }
+
+    impl<T> IntoConstPtr<T> for *mut T {
+        fn into_const(self) -> *const T {
+            self as *const T
+        }
+    }
+
     pub fn is_less_over_approximation<T>(_: &T, _: &T) -> bool {
         kani::any()
     }
 
-    pub fn can_dereference_all<'a, I, T>(ptrs: I) -> bool
+    pub fn can_dereference_all<'a, I, S, T>(ptrs: I) -> bool
     where
-        T: 'a,
-        I: IntoIterator<Item = &'a *const T>,
+        I: IntoIterator<Item = &'a S>,
+        S: 'a + IntoConstPtr<T>,
     {
-        ptrs.into_iter().all(|ptr| kani::mem::can_dereference(*ptr))
+        ptrs.into_iter()
+            .all(|&ptr| kani::mem::can_dereference(ptr.into_const()))
     }
 
     pub fn can_write_all<'a, I, T>(ptrs: I) -> bool
@@ -919,6 +936,13 @@ mod verification_utils {
     pub fn non_overlapping<T>(ptr_1: *const T, ptr_2: *mut T, len: usize) -> bool {
         (ptr_1 as isize).abs_diff(ptr_2 as isize) / mem::size_of::<T>() >= len
     }
+
+    pub fn pos_no_overflow<T>(pos: usize, _: *mut T) -> bool {
+        pos <= isize::MAX as usize
+            && pos
+                .checked_mul(const { mem::size_of::<T>() })
+                .is_some_and(|bytes| bytes <= isize::MAX as usize)
+    }
 }
 
 #[cfg(kani)]
@@ -926,6 +950,31 @@ mod verification {
     use super::*;
 
     type VerifTy = usize;
+
+    #[kani::proof]
+    fn check_swap_if_less() {
+        let mut generator = kani::pointer_generator::<usize, 10>();
+
+        let v_base: *mut usize = generator.any_in_bounds().ptr;
+        let a_pos: usize = kani::any();
+        let b_pos: usize = kani::any();
+
+        let a_ptr = v_base.wrapping_add(a_pos);
+        let b_ptr = v_base.wrapping_add(b_pos);
+
+        kani::assume(
+            pos_no_overflow(a_pos, v_base)
+                && pos_no_overflow(b_pos, v_base)
+                && kani::mem::same_allocation(a_ptr, v_base)
+                && kani::mem::same_allocation(b_ptr, v_base)
+                && kani::mem::can_dereference(a_ptr)
+                && kani::mem::can_dereference(b_ptr),
+        );
+
+        unsafe {
+            swap_if_less(v_base, a_pos, b_pos, &mut is_less_over_approximation);
+        }
+    }
 
     #[kani::proof]
     fn check_sort4_stable() {
