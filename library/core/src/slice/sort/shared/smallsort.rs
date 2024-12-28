@@ -267,7 +267,11 @@ fn small_sort_general_with_scratch<T: FreezeMarker, F: FnMut(&T, &T) -> bool>(
             // We extend this to desired_len, src is valid for desired_len elements.
             let src = v_base.add(offset);
             let dst = scratch_base.add(offset);
-            let desired_len = if offset == 0 { len_div_2 } else { len - len_div_2 };
+            let desired_len = if offset == 0 {
+                len_div_2
+            } else {
+                len - len_div_2
+            };
 
             for i in presorted_len..desired_len {
                 ptr::copy_nonoverlapping(src.add(i), dst.add(i), 1);
@@ -276,7 +280,11 @@ fn small_sort_general_with_scratch<T: FreezeMarker, F: FnMut(&T, &T) -> bool>(
         }
 
         // SAFETY: see comment in `CopyOnDrop::drop`.
-        let drop_guard = CopyOnDrop { src: scratch_base, dst: v_base, len };
+        let drop_guard = CopyOnDrop {
+            src: scratch_base,
+            dst: v_base,
+            len,
+        };
 
         // SAFETY: at this point scratch_base is fully initialized, allowing us
         // to use it as the source of our merge back into the original array.
@@ -554,7 +562,11 @@ unsafe fn insert_tail<T, F: FnMut(&T, &T) -> bool>(begin: *mut T, tail: *mut T, 
         // the correct insertion position, gap_guard ensures the element is moved
         // back into the array.
         let tmp = ManuallyDrop::new(tail.read());
-        let mut gap_guard = CopyOnDrop { src: &*tmp, dst: tail, len: 1 };
+        let mut gap_guard = CopyOnDrop {
+            src: &*tmp,
+            dst: tail,
+            len: 1,
+        };
 
         loop {
             // SAFETY: we move sift into the gap (which is valid), and point the
@@ -658,7 +670,11 @@ pub unsafe fn sort4_stable<T, F: FnMut(&T, &T) -> bool>(
 
     #[inline(always)]
     fn select<T>(cond: bool, if_true: *const T, if_false: *const T) -> *const T {
-        if cond { if_true } else { if_false }
+        if cond {
+            if_true
+        } else {
+            if_false
+        }
     }
 }
 
@@ -869,4 +885,16 @@ fn panic_on_ord_violation() -> ! {
 pub(crate) const fn has_efficient_in_place_swap<T>() -> bool {
     // Heuristic that holds true on all tested 64-bit capable architectures.
     mem::size_of::<T>() <= 8 // mem::size_of::<u64>()
+}
+
+#[cfg(kani)]
+mod verification {
+    use super::*;
+
+    type VerifTy = usize;
+
+    #[kani::proof]
+    fn check_has_efficient_in_place_swap() {
+        has_efficient_in_place_swap::<VerifTy>();
+    }
 }
