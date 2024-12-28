@@ -889,6 +889,7 @@ pub(crate) const fn has_efficient_in_place_swap<T>() -> bool {
 #[cfg(kani)]
 mod verification_utils {
     use super::*;
+    use crate::borrow::Borrow;
 
     macro_rules! ptr_next_counts {
         ($ptr:ident, [$($args:expr),*]) => { [$($ptr.wrapping_add($args)),*] };
@@ -896,7 +897,7 @@ mod verification_utils {
 
     pub(super) use ptr_next_counts;
 
-    trait IntoConstPtr<T>: Copy {
+    pub trait IntoConstPtr<T>: Copy {
         fn into_const(self) -> *const T;
     }
 
@@ -916,13 +917,14 @@ mod verification_utils {
         kani::any()
     }
 
-    pub fn can_dereference_all<'a, I, S, T>(ptrs: I) -> bool
+    pub fn can_dereference_all<I, B, S, T>(ptrs: I) -> bool
     where
-        I: IntoIterator<Item = &'a S>,
-        S: 'a + IntoConstPtr<T>,
+        I: IntoIterator<Item = B>,
+        B: Borrow<S>,
+        S: IntoConstPtr<T>,
     {
         ptrs.into_iter()
-            .all(|&ptr| kani::mem::can_dereference(ptr.into_const()))
+            .all(|ptr| kani::mem::can_dereference((*ptr.borrow()).into_const()))
     }
 
     pub fn can_write_all<'a, I, T>(ptrs: I) -> bool
@@ -933,14 +935,39 @@ mod verification_utils {
         ptrs.into_iter().all(|ptr| kani::mem::can_write(*ptr))
     }
 
+    pub fn all_same_allocation<I, B, S, T>(ptrs: I) -> bool
+    where
+        I: IntoIterator<Item = B>,
+        B: Borrow<S>,
+        S: IntoConstPtr<T>,
+    {
+        let mut iter = ptrs.into_iter();
+        if let Some(first) = iter.next() {
+            let first = (*first.borrow()).into_const();
+            iter.all(|ptr| kani::mem::same_allocation((*ptr.borrow()).into_const(), first))
+        } else {
+            true
+        }
+    }
+
     pub fn non_overlapping<T>(ptr_1: *const T, ptr_2: *mut T, len: usize) -> bool {
-        (ptr_1 as isize).abs_diff(ptr_2 as isize) / mem::size_of::<T>() >= len
+        (ptr_1 as usize).abs_diff(ptr_2 as usize) / mem::size_of::<T>() >= len
+    }
+
+    pub fn pointer_range_inclusive<T>(
+        begin: *const T,
+        tail: *const T,
+    ) -> impl IntoIterator<Item = *const T> {
+        (begin as usize..tail as usize)
+            .step_by(mem::size_of::<T>())
+            .chain(Some(tail as usize))
+            .map(|addr| addr as *const T)
     }
 
     pub fn pos_no_overflow<T>(pos: usize, _: *mut T) -> bool {
         pos <= isize::MAX as usize
             && pos
-                .checked_mul(const { mem::size_of::<T>() })
+                .checked_mul(mem::size_of::<T>())
                 .is_some_and(|bytes| bytes <= isize::MAX as usize)
     }
 }
@@ -977,6 +1004,25 @@ mod verification {
     }
 
     #[kani::proof]
+    #[kani::unwind(32)]
+    fn check_insert_tail() {
+        let mut generator = kani::pointer_generator::<usize, SMALL_SORT_NETWORK_THRESHOLD>();
+
+        let begin: *mut usize = generator.any_in_bounds().ptr;
+        let tail: *mut usize = generator.any_in_bounds().ptr;
+
+        kani::assume(
+            begin < tail
+                && can_dereference_all(pointer_range_inclusive(begin, tail))
+                && all_same_allocation(pointer_range_inclusive(begin, tail)),
+        );
+
+        unsafe {
+            insert_tail(begin, tail, &mut is_less_over_approximation);
+        }
+    }
+
+    #[kani::proof]
     fn check_sort4_stable() {
         let mut generator_1 = kani::pointer_generator::<VerifTy, SMALL_SORT_GENERAL_SCRATCH_LEN>();
         let mut generator_2 = kani::pointer_generator::<VerifTy, SMALL_SORT_GENERAL_SCRATCH_LEN>();
@@ -992,7 +1038,7 @@ mod verification {
         let dst_ptrs = ptr_next_counts!(dst, [0, 1, 2, 3]);
 
         kani::assume(
-            can_dereference_all(&v_base_ptrs)
+            can_dereference_all::<_, _, *const VerifTy, _>(&v_base_ptrs)
                 && can_write_all(&dst_ptrs)
                 && non_overlapping(v_base, dst, 4),
         );
