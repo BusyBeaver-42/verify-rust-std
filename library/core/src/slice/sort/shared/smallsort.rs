@@ -394,6 +394,18 @@ where
 /// types. `is_less` could be a huge function and we want to give the compiler an option to
 /// not inline this function. For the same reasons that this function is very perf critical
 /// it should be in the same module as the functions that use it.
+#[kani::requires({
+    let a_ptr = v_base.wrapping_add(a_pos);
+    let b_ptr = v_base.wrapping_add(b_pos);
+
+    pos_no_overflow(a_pos, v_base)
+        && pos_no_overflow(b_pos, v_base)
+        && kani::mem::same_allocation(a_ptr, v_base)
+        && kani::mem::same_allocation(b_ptr, v_base)
+        && kani::mem::can_dereference(a_ptr)
+        && kani::mem::can_dereference(b_ptr)
+})]
+#[kani::modifies(v_base.wrapping_add(a_pos), v_base.wrapping_add(b_pos))]
 unsafe fn swap_if_less<T, F>(v_base: *mut T, a_pos: usize, b_pos: usize, is_less: &mut F)
 where
     F: FnMut(&T, &T) -> bool,
@@ -927,6 +939,10 @@ mod verification_utils {
         panic!();
     }
 
+    pub fn intrinsics_assume_override(cond: bool) {
+        assert!(cond);
+    }
+
     pub fn can_dereference_all<I, B, S, T>(ptrs: I) -> bool
     where
         I: IntoIterator<Item = B>,
@@ -988,25 +1004,13 @@ mod verification {
 
     type VerifTy = usize;
 
-    #[kani::proof]
+    #[kani::proof_for_contract(swap_if_less)]
     fn check_swap_if_less() {
-        let mut generator = kani::pointer_generator::<usize, 10>();
+        let mut generator = kani::pointer_generator::<VerifTy, SMALL_SORT_GENERAL_SCRATCH_LEN>();
 
-        let v_base: *mut usize = generator.any_in_bounds().ptr;
+        let v_base: *mut VerifTy = generator.any_in_bounds().ptr;
         let a_pos: usize = kani::any();
         let b_pos: usize = kani::any();
-
-        let a_ptr = v_base.wrapping_add(a_pos);
-        let b_ptr = v_base.wrapping_add(b_pos);
-
-        kani::assume(
-            pos_no_overflow(a_pos, v_base)
-                && pos_no_overflow(b_pos, v_base)
-                && kani::mem::same_allocation(a_ptr, v_base)
-                && kani::mem::same_allocation(b_ptr, v_base)
-                && kani::mem::can_dereference(a_ptr)
-                && kani::mem::can_dereference(b_ptr),
-        );
 
         unsafe {
             swap_if_less(v_base, a_pos, b_pos, &mut is_less_over_approximation);
@@ -1016,11 +1020,11 @@ mod verification {
     #[kani::proof_for_contract(insert_tail)]
     #[kani::solver(minisat)]
     #[kani::unwind(32)]
-    fn check_insert_tail_contract() {
-        let mut generator = kani::pointer_generator::<usize, SMALL_SORT_NETWORK_THRESHOLD>();
+    fn check_insert_tail() {
+        let mut generator = kani::pointer_generator::<VerifTy, SMALL_SORT_GENERAL_THRESHOLD>();
 
-        let begin: *mut usize = generator.any_in_bounds().ptr;
-        let tail: *mut usize = generator.any_in_bounds().ptr;
+        let begin: *mut VerifTy = generator.any_in_bounds().ptr;
+        let tail: *mut VerifTy = generator.any_in_bounds().ptr;
 
         unsafe {
             insert_tail(begin, tail, &mut is_less_over_approximation);
@@ -1032,7 +1036,7 @@ mod verification {
     #[kani::stub(intrinsics::abort, intrinsics_abort_override)]
     #[kani::unwind(5)]
     fn check_insertion_sort_shift_left() {
-        let mut arr: [usize; 5] = kani::any();
+        let mut arr: [VerifTy; 5] = kani::any();
         let v = kani::slice::any_slice_of_array_mut(&mut arr);
         let offset = kani::any();
 
