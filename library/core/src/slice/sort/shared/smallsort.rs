@@ -550,6 +550,12 @@ where
 ///
 /// # Safety
 /// begin < tail and p must be valid and initialized for all begin <= p <= tail.
+#[kani::requires({
+    (begin as usize) < (tail as usize)
+        && can_dereference_all(pointer_range_inclusive(begin, tail))
+        && all_same_allocation(pointer_range_inclusive(begin, tail))
+})]
+#[kani::modifies(unsafe { slice::from_raw_parts_mut(begin, 1 + tail.offset_from(begin) as usize) })]
 unsafe fn insert_tail<T, F: FnMut(&T, &T) -> bool>(begin: *mut T, tail: *mut T, is_less: &mut F) {
     // SAFETY: see individual comments.
     unsafe {
@@ -917,6 +923,10 @@ mod verification_utils {
         kani::any()
     }
 
+    pub fn intrinsics_abort_override() -> ! {
+        panic!();
+    }
+
     pub fn can_dereference_all<I, B, S, T>(ptrs: I) -> bool
     where
         I: IntoIterator<Item = B>,
@@ -1003,23 +1013,33 @@ mod verification {
         }
     }
 
-    #[kani::proof]
+    #[kani::proof_for_contract(insert_tail)]
+    #[kani::solver(minisat)]
     #[kani::unwind(32)]
-    fn check_insert_tail() {
+    fn check_insert_tail_contract() {
         let mut generator = kani::pointer_generator::<usize, SMALL_SORT_NETWORK_THRESHOLD>();
 
         let begin: *mut usize = generator.any_in_bounds().ptr;
         let tail: *mut usize = generator.any_in_bounds().ptr;
 
-        kani::assume(
-            begin < tail
-                && can_dereference_all(pointer_range_inclusive(begin, tail))
-                && all_same_allocation(pointer_range_inclusive(begin, tail)),
-        );
-
         unsafe {
             insert_tail(begin, tail, &mut is_less_over_approximation);
         }
+    }
+
+    #[kani::proof]
+    // #[kani::stub_verified(insert_tail)]
+    #[kani::stub(intrinsics::abort, intrinsics_abort_override)]
+    #[kani::unwind(5)]
+    fn check_insertion_sort_shift_left() {
+        let mut arr: [usize; 5] = kani::any();
+        let v = kani::slice::any_slice_of_array_mut(&mut arr);
+        let offset = kani::any();
+
+        kani::assume(offset != 0);
+        kani::assume(offset <= v.len());
+
+        insertion_sort_shift_left(v, offset, &mut is_less_over_approximation);
     }
 
     #[kani::proof]
