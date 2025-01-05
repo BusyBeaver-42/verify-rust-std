@@ -642,6 +642,15 @@ pub fn insertion_sort_shift_left<T, F: FnMut(&T, &T) -> bool>(
 
 /// SAFETY: The caller MUST guarantee that `v_base` is valid for 4 reads and
 /// `dst` is valid for 4 writes. The result will be stored in `dst[0..4]`.
+#[kani::requires({
+    let v_base_ptrs = ptr_next_counts!(v_base, [0, 1, 2, 3]);
+    let dst_ptrs = ptr_next_counts!(dst, [0, 1, 2, 3]);
+
+    can_dereference_all::<_, _, *const T, _>(&v_base_ptrs)
+        && can_write_all(&dst_ptrs)
+        && non_overlapping(v_base, dst, 4)
+})]
+#[kani::modifies(dst, dst.wrapping_add(1), dst.wrapping_add(2), dst.wrapping_add(3))]
 pub unsafe fn sort4_stable<T, F: FnMut(&T, &T) -> bool>(
     v_base: *const T,
     dst: *mut T,
@@ -698,6 +707,19 @@ pub unsafe fn sort4_stable<T, F: FnMut(&T, &T) -> bool>(
 /// SAFETY: The caller MUST guarantee that `v_base` is valid for 8 reads and
 /// writes, `scratch_base` and `dst` MUST be valid for 8 writes. The result will
 /// be stored in `dst[0..8]`.
+#[kani::requires({
+    let v_ptrs = ptr_next_counts!(v_base, [0, 1, 2, 3, 4, 5, 6, 7]);
+    let dst_ptrs = ptr_next_counts!(dst, [0, 1, 2, 3, 4, 5, 6, 7]);
+    let scratch_ptrs = ptr_next_counts!(scratch_base, [0, 1, 2, 3, 4, 5, 6, 7]);
+
+    can_dereference_all::<_, _, *mut T, _>(&v_ptrs)
+        && can_write_all(&v_ptrs)
+        && can_write_all(&dst_ptrs)
+        && can_write_all(&scratch_ptrs)
+        && non_overlapping(v_base, scratch_base, 8)
+        && non_overlapping(dst, scratch_base, 8)
+})]
+#[kani::modifies(slice::from_raw_parts(dst, 8), slice::from_raw_parts(scratch_base, 8))]
 unsafe fn sort8_stable<T: FreezeMarker, F: FnMut(&T, &T) -> bool>(
     v_base: *mut T,
     dst: *mut T,
@@ -1110,7 +1132,7 @@ mod verification {
     }
 
     #[kani::proof]
-    // #[kani::stub_verified(insert_tail)]
+    // #[kani::stub_verified(insert_tail)] // kani crashes :(
     #[kani::stub(intrinsics::abort, intrinsics_abort_override)]
     #[kani::unwind(5)]
     fn check_insertion_sort_shift_left() {
@@ -1124,7 +1146,8 @@ mod verification {
         insertion_sort_shift_left(v, offset, &mut is_less_over_approximation);
     }
 
-    #[kani::proof]
+    #[kani::proof_for_contract(sort4_stable)]
+    #[kani::solver(minisat)]
     fn check_sort4_stable() {
         let mut generator_1 = kani::pointer_generator::<VerifTy, SMALL_SORT_GENERAL_SCRATCH_LEN>();
         let mut generator_2 = kani::pointer_generator::<VerifTy, SMALL_SORT_GENERAL_SCRATCH_LEN>();
@@ -1136,17 +1159,26 @@ mod verification {
             generator_2.any_in_bounds().ptr
         };
 
-        let v_base_ptrs = ptr_next_counts!(v_base, [0, 1, 2, 3]);
-        let dst_ptrs = ptr_next_counts!(dst, [0, 1, 2, 3]);
-
-        kani::assume(
-            can_dereference_all::<_, _, *const VerifTy, _>(&v_base_ptrs)
-                && can_write_all(&dst_ptrs)
-                && non_overlapping(v_base, dst, 4),
-        );
-
         unsafe {
             sort4_stable(v_base, dst, &mut is_less_over_approximation);
+        }
+    }
+
+    #[kani::proof_for_contract(sort8_stable)]
+    // #[kani::stub(bidirectional_merge, non_panicking_bidirectional_merge)] // kani crashes :(
+    // #[kani::stub_verified(non_panicking_bidirectional_merge, sort4_stable)] // https://github.com/model-checking/kani/issues/3804
+    #[kani::stub_verified(sort4_stable)]
+    fn check_sort8_stable() {
+        let mut generators = [kani::pointer_generator::<VerifTy, SMALL_SORT_GENERAL_SCRATCH_LEN>(),
+        kani::pointer_generator::<VerifTy, SMALL_SORT_GENERAL_SCRATCH_LEN>(),
+        kani::pointer_generator::<VerifTy, SMALL_SORT_GENERAL_SCRATCH_LEN>()];
+
+        let v_base: *mut VerifTy = generators[0].any_in_bounds().ptr;
+        let dst: *mut VerifTy = generators[0].any_in_bounds().ptr;
+        let scratch_base: *mut VerifTy = generators[0].any_in_bounds().ptr;
+
+        unsafe {
+            sort8_stable(v_base, dst, scratch_base, &mut is_less_over_approximation);
         }
     }
 
