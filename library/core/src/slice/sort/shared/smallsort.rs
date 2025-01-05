@@ -975,14 +975,6 @@ mod verification_utils {
         kani::any()
     }
 
-    pub fn intrinsics_abort_override() -> ! {
-        panic!();
-    }
-
-    pub fn intrinsics_assume_override(cond: bool) {
-        assert!(cond);
-    }
-
     pub fn can_dereference_all<I, B, S, T>(ptrs: I) -> bool
     where
         I: IntoIterator<Item = B>,
@@ -1133,7 +1125,6 @@ mod verification {
 
     #[kani::proof]
     // #[kani::stub_verified(insert_tail)] // kani crashes :(
-    #[kani::stub(intrinsics::abort, intrinsics_abort_override)]
     #[kani::unwind(5)]
     fn check_insertion_sort_shift_left() {
         let mut arr: [VerifTy; 5] = kani::any();
