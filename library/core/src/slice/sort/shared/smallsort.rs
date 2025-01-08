@@ -4,7 +4,7 @@ use crate::mem::{self, ManuallyDrop, MaybeUninit};
 use crate::slice::sort::shared::FreezeMarker;
 use crate::{intrinsics, ptr, slice};
 
-#[cfg(kani)]
+// #[cfg(kani)]
 use verification_utils::*;
 
 // It's important to differentiate between SMALL_SORT_THRESHOLD performance for
@@ -398,8 +398,8 @@ where
     let a_ptr = v_base.wrapping_add(a_pos);
     let b_ptr = v_base.wrapping_add(b_pos);
 
-    pos_no_overflow(a_pos, v_base)
-        && pos_no_overflow(b_pos, v_base)
+    valid_offset(a_pos, v_base)
+        && valid_offset(b_pos, v_base)
         && kani::mem::same_allocation(a_ptr, v_base)
         && kani::mem::same_allocation(b_ptr, v_base)
         && kani::mem::can_dereference(a_ptr)
@@ -563,11 +563,14 @@ where
 /// # Safety
 /// begin < tail and p must be valid and initialized for all begin <= p <= tail.
 #[kani::requires({
-    (begin as usize) < (tail as usize)
-        && can_dereference_all(pointer_range_inclusive(begin, tail))
-        && all_same_allocation(pointer_range_inclusive(begin, tail))
+    begin < tail
+        && kani::mem::can_dereference(begin)
+        && kani::mem::can_dereference(tail)
+        && kani::mem::same_allocation(begin, tail)
 })]
-#[kani::modifies(unsafe { slice::from_raw_parts(begin, 1 + tail.offset_from(begin) as usize) })]
+#[kani::modifies(
+    ptr::slice_from_raw_parts(begin, 1 + unsafe { tail.offset_from(begin) } as usize)
+)]
 unsafe fn insert_tail<T, F: FnMut(&T, &T) -> bool>(begin: *mut T, tail: *mut T, is_less: &mut F) {
     // SAFETY: see individual comments.
     unsafe {
@@ -643,14 +646,13 @@ pub fn insertion_sort_shift_left<T, F: FnMut(&T, &T) -> bool>(
 /// SAFETY: The caller MUST guarantee that `v_base` is valid for 4 reads and
 /// `dst` is valid for 4 writes. The result will be stored in `dst[0..4]`.
 #[kani::requires({
-    let v_base_ptrs = ptr_next_counts!(v_base, [0, 1, 2, 3]);
-    let dst_ptrs = ptr_next_counts!(dst, [0, 1, 2, 3]);
-
-    can_dereference_all::<_, _, *const T, _>(&v_base_ptrs)
-        && can_write_all(&dst_ptrs)
+    kani::mem::can_dereference(v_base)
+        && kani::mem::same_allocation(v_base, v_base.wrapping_add(4))
+        && kani::mem::can_write(dst)
+        && kani::mem::same_allocation(dst, dst.wrapping_add(4))
         && non_overlapping(v_base, dst, 4)
 })]
-#[kani::modifies(dst, dst.wrapping_add(1), dst.wrapping_add(2), dst.wrapping_add(3))]
+#[kani::modifies(ptr::slice_from_raw_parts(dst, 4))]
 pub unsafe fn sort4_stable<T, F: FnMut(&T, &T) -> bool>(
     v_base: *const T,
     dst: *mut T,
@@ -707,19 +709,20 @@ pub unsafe fn sort4_stable<T, F: FnMut(&T, &T) -> bool>(
 /// SAFETY: The caller MUST guarantee that `v_base` is valid for 8 reads and
 /// writes, `scratch_base` and `dst` MUST be valid for 8 writes. The result will
 /// be stored in `dst[0..8]`.
-#[kani::requires({
-    let v_ptrs = ptr_next_counts!(v_base, [0, 1, 2, 3, 4, 5, 6, 7]);
-    let dst_ptrs = ptr_next_counts!(dst, [0, 1, 2, 3, 4, 5, 6, 7]);
-    let scratch_ptrs = ptr_next_counts!(scratch_base, [0, 1, 2, 3, 4, 5, 6, 7]);
-
-    can_dereference_all::<_, _, *mut T, _>(&v_ptrs)
-        && can_write_all(&v_ptrs)
-        && can_write_all(&dst_ptrs)
-        && can_write_all(&scratch_ptrs)
+#[kani::requires(
+    kani::mem::can_dereference(v_base)
+        && kani::mem::same_allocation(v_base, v_base.wrapping_add(8))
+        && kani::mem::can_write(dst)
+        && kani::mem::same_allocation(dst, dst.wrapping_add(8))
+        && kani::mem::can_write(scratch_base)
+        && kani::mem::same_allocation(scratch_base, scratch_base.wrapping_add(8))
         && non_overlapping(v_base, scratch_base, 8)
         && non_overlapping(dst, scratch_base, 8)
-})]
-#[kani::modifies(slice::from_raw_parts(dst, 8), slice::from_raw_parts(scratch_base, 8))]
+)]
+#[kani::modifies(
+    ptr::slice_from_raw_parts(dst, 8),
+    ptr::slice_from_raw_parts(scratch_base, 8)
+)]
 unsafe fn sort8_stable<T: FreezeMarker, F: FnMut(&T, &T) -> bool>(
     v_base: *mut T,
     dst: *mut T,
@@ -739,15 +742,6 @@ unsafe fn sort8_stable<T: FreezeMarker, F: FnMut(&T, &T) -> bool>(
     }
 }
 
-#[kani::requires(
-    kani::mem::can_dereference(left_src)
-        && kani::mem::can_dereference(right_src)
-        && kani::mem::can_write(dst)
-        && left_src != dst
-        && right_src != dst
-        && kani::mem::same_allocation(dst, dst.wrapping_add(1))
-)]
-#[kani::modifies(dst)]
 #[inline(always)]
 unsafe fn merge_up<T, F: FnMut(&T, &T) -> bool>(
     mut left_src: *const T,
@@ -781,15 +775,6 @@ unsafe fn merge_up<T, F: FnMut(&T, &T) -> bool>(
     (left_src, right_src, dst)
 }
 
-#[kani::requires(
-    kani::mem::can_dereference(left_src)
-        && kani::mem::can_dereference(right_src)
-        && kani::mem::can_write(dst)
-        && left_src != dst
-        && right_src != dst
-        && kani::mem::same_allocation(dst, dst.wrapping_sub(1))
-)]
-#[kani::modifies(dst)]
 #[inline(always)]
 unsafe fn merge_down<T, F: FnMut(&T, &T) -> bool>(
     mut left_src: *const T,
@@ -944,138 +929,115 @@ pub(crate) const fn has_efficient_in_place_swap<T>() -> bool {
     mem::size_of::<T>() <= 8 // mem::size_of::<u64>()
 }
 
-#[cfg(kani)]
+// #[cfg(kani)]
 mod verification_utils {
     use super::*;
-    use crate::borrow::Borrow;
-
-    macro_rules! ptr_next_counts {
-        ($ptr:ident, [$($args:expr),*]) => { [$($ptr.wrapping_add($args)),*] };
-    }
-
-    pub(super) use ptr_next_counts;
-
-    pub trait IntoConstPtr<T>: Copy {
-        fn into_const(self) -> *const T;
-    }
-
-    impl<T> IntoConstPtr<T> for *const T {
-        fn into_const(self) -> *const T {
-            self
-        }
-    }
-
-    impl<T> IntoConstPtr<T> for *mut T {
-        fn into_const(self) -> *const T {
-            self as *const T
-        }
-    }
 
     pub fn is_less_over_approximation<T>(_: &T, _: &T) -> bool {
         kani::any()
-    }
-
-    pub fn can_dereference_all<I, B, S, T>(ptrs: I) -> bool
-    where
-        I: IntoIterator<Item = B>,
-        B: Borrow<S>,
-        S: IntoConstPtr<T>,
-    {
-        ptrs.into_iter()
-            .all(|ptr| kani::mem::can_dereference((*ptr.borrow()).into_const()))
-    }
-
-    pub fn can_write_all<I, T>(ptrs: I) -> bool
-    where
-        I: IntoIterator,
-        I::Item: Borrow<*mut T>,
-    {
-        ptrs.into_iter()
-            .all(|ptr| kani::mem::can_write(*ptr.borrow()))
-    }
-
-    pub fn all_same_allocation<I, B, S, T>(ptrs: I) -> bool
-    where
-        I: IntoIterator<Item = B>,
-        B: Borrow<S>,
-        S: IntoConstPtr<T>,
-    {
-        let mut iter = ptrs.into_iter();
-        if let Some(first) = iter.next() {
-            let first = (*first.borrow()).into_const();
-            iter.all(|ptr| kani::mem::same_allocation((*ptr.borrow()).into_const(), first))
-        } else {
-            true
-        }
     }
 
     pub fn non_overlapping<T>(ptr_1: *const T, ptr_2: *const T, len: usize) -> bool {
         (ptr_1 as usize).abs_diff(ptr_2 as usize) / mem::size_of::<T>() >= len
     }
 
-    pub fn pointer_range_inclusive<T>(
-        begin: *const T,
-        tail: *const T,
-    ) -> impl IntoIterator<Item = *const T> {
-        (begin as usize..tail as usize)
-            .step_by(mem::size_of::<T>())
-            .chain(Some(tail as usize))
-            .map(|addr| addr as *const T)
+    pub fn valid_offset<T>(offset: usize, _: *const T) -> bool {
+        let max_offset = const {
+            if mem::size_of::<T>() == 0 {
+                usize::MAX
+            } else {
+                isize::MAX as usize / mem::size_of::<T>()
+            }
+        };
+
+        offset <= max_offset
     }
 
-    pub fn pointer_range_inclusive_mut<T>(
-        begin: *mut T,
-        tail: *mut T,
-    ) -> impl IntoIterator<Item = *mut T> {
-        (begin as usize..tail as usize)
-            .step_by(mem::size_of::<T>())
-            .chain(Some(tail as usize))
-            .map(|addr| addr as *mut T)
-    }
-
-    pub fn pos_no_overflow<T>(pos: usize, _: *mut T) -> bool {
-        pos <= isize::MAX as usize
-            && pos
-                .checked_mul(mem::size_of::<T>())
-                .is_some_and(|bytes| bytes <= isize::MAX as usize)
-    }
-}
-
-#[cfg(kani)]
-mod customized {
-    use super::*;
-
+    /// Merge v assuming v[..len / 2] and v[len / 2..] are sorted.
+    ///
+    /// Original idea for bi-directional merging by Igor van den Hoven (quadsort),
+    /// adapted to only use merge up and down. In contrast to the original
+    /// parity_merge function, it performs 2 writes instead of 4 per iteration.
+    ///
+    /// # Safety
+    /// The caller must guarantee that `dst` is valid for v.len() writes.
+    /// Also `v.as_ptr()` and `dst` must not alias and v.len() must be >= 2.
+    ///
+    /// Note that T must be Freeze, the comparison function is evaluated on outdated
+    /// temporary 'copies' that may not end up in the final array.
     #[kani::requires(
     v.len() >= 2
-        && can_write_all(pointer_range_inclusive_mut(dst, dst.wrapping_add(v.len() - 1)))
-        && all_same_allocation(pointer_range_inclusive(dst, dst.wrapping_add(v.len() - 1)))
+        && kani::mem::can_dereference(dst)
+        && kani::mem::same_allocation(dst, dst.wrapping_add(v.len()))
         && non_overlapping(v.as_ptr(), dst, v.len())
     )]
-    #[kani::modifies(unsafe { slice::from_raw_parts(dst, v.len()) })]
+    #[kani::modifies(ptr::slice_from_raw_parts(dst, v.len()))]
     pub unsafe fn non_panicking_bidirectional_merge<T: FreezeMarker, F: FnMut(&T, &T) -> bool>(
         v: &[T],
         dst: *mut T,
         is_less: &mut F,
     ) {
+        // It helps to visualize the merge:
+        //
+        // Initial:
+        //
+        //  |dst (in dst)
+        //  |left               |right
+        //  v                   v
+        // [xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]
+        //                     ^                   ^
+        //                     |left_rev           |right_rev
+        //                                         |dst_rev (in dst)
+        //
+        // After:
+        //
+        //                      |dst (in dst)
+        //        |left         |           |right
+        //        v             v           v
+        // [xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]
+        //       ^             ^           ^
+        //       |left_rev     |           |right_rev
+        //                     |dst_rev (in dst)
+        //
+        // In each iteration one of left or right moves up one position, and one of
+        // left_rev or right_rev moves down one position, whereas dst always moves
+        // up one position and dst_rev always moves down one position. Assuming
+        // the input was sorted and the comparison function is correctly implemented
+        // at the end we will have left == left_rev + 1, and right == right_rev + 1,
+        // fully consuming the input having written it to dst.
+
         let len = v.len();
         let src = v.as_ptr();
+
         let len_div_2 = len / 2;
+
+        // SAFETY: The caller has to ensure that len >= 2.
         unsafe {
-            intrinsics::assume(len_div_2 != 0);
+            intrinsics::assume(len_div_2 != 0); // This can avoid useless code-gen.
         }
+
+        // SAFETY: no matter what the result of the user-provided comparison function
+        // is, all 4 read pointers will always be in-bounds. Writing `dst` and `dst_rev`
+        // will always be in bounds if the caller guarantees that `dst` is valid for
+        // `v.len()` writes.
         unsafe {
             let mut left = src;
             let mut right = src.add(len_div_2);
             let mut dst = dst;
+
             let mut left_rev = src.add(len_div_2 - 1);
             let mut right_rev = src.add(len - 1);
             let mut dst_rev = dst.add(len - 1);
+
             for _ in 0..len_div_2 {
                 (left, right, dst) = merge_up(left, right, dst, is_less);
                 (left_rev, right_rev, dst_rev) = merge_down(left_rev, right_rev, dst_rev, is_less);
             }
+
             let left_end = left_rev.wrapping_add(1);
             let right_end = right_rev.wrapping_add(1);
+
+            // Odd length, so one element is left unconsumed in the input.
             if len % 2 != 0 {
                 let left_nonempty = left < left_end;
                 let last_src = if left_nonempty { left } else { right };
@@ -1083,6 +1045,10 @@ mod customized {
                 left = left.add(left_nonempty as usize);
                 right = right.add((!left_nonempty) as usize);
             }
+
+            // We now should have consumed the full input exactly once. This can only fail if the
+            // user-provided comparison function fails to implement a strict weak ordering. In that case
+            // we panic and never access the inconsistent state in dst.
             if left != left_end || right != right_end {
                 // panic_on_ord_violation();
             }
@@ -1090,9 +1056,9 @@ mod customized {
     }
 }
 
-#[cfg(kani)]
+// #[cfg(kani)]
 mod verification {
-    use super::{customized::*, *};
+    use super::*;
 
     type VerifTy = usize;
 
@@ -1125,9 +1091,9 @@ mod verification {
 
     #[kani::proof]
     // #[kani::stub_verified(insert_tail)] // kani crashes :(
-    #[kani::unwind(5)]
+    #[kani::unwind(10)]
     fn check_insertion_sort_shift_left() {
-        let mut arr: [VerifTy; 5] = kani::any();
+        let mut arr: [VerifTy; 10] = kani::any();
         let v = kani::slice::any_slice_of_array_mut(&mut arr);
         let offset = kani::any();
 
@@ -1155,25 +1121,25 @@ mod verification {
         }
     }
 
-    #[kani::proof_for_contract(sort8_stable)]
-    // #[kani::stub(bidirectional_merge, non_panicking_bidirectional_merge)] // kani crashes :(
-    // #[kani::stub_verified(non_panicking_bidirectional_merge, sort4_stable)] // https://github.com/model-checking/kani/issues/3804
-    #[kani::stub_verified(sort4_stable)]
-    fn check_sort8_stable() {
-        let mut generators = [kani::pointer_generator::<VerifTy, SMALL_SORT_GENERAL_SCRATCH_LEN>(),
-        kani::pointer_generator::<VerifTy, SMALL_SORT_GENERAL_SCRATCH_LEN>(),
-        kani::pointer_generator::<VerifTy, SMALL_SORT_GENERAL_SCRATCH_LEN>()];
+    // #[kani::proof_for_contract(sort8_stable)]
+    // // #[kani::stub(bidirectional_merge, non_panicking_bidirectional_merge)] // kani crashes :(
+    // // #[kani::stub_verified(non_panicking_bidirectional_merge, sort4_stable)] // https://github.com/model-checking/kani/issues/3804
+    // // #[kani::stub_verified(sort4_stable)] // kani crashes :(
+    // fn check_sort8_stable() {
+    //     let mut generators = [kani::pointer_generator::<VerifTy, SMALL_SORT_GENERAL_SCRATCH_LEN>(),
+    //     kani::pointer_generator::<VerifTy, SMALL_SORT_GENERAL_SCRATCH_LEN>(),
+    //     kani::pointer_generator::<VerifTy, SMALL_SORT_GENERAL_SCRATCH_LEN>()];
+    //
+    //     let v_base: *mut VerifTy = generators[0].any_in_bounds().ptr;
+    //     let dst: *mut VerifTy = generators[0].any_in_bounds().ptr;
+    //     let scratch_base: *mut VerifTy = generators[0].any_in_bounds().ptr;
+    //
+    //     unsafe {
+    //         sort8_stable(v_base, dst, scratch_base, &mut is_less_over_approximation);
+    //     }
+    // }
 
-        let v_base: *mut VerifTy = generators[0].any_in_bounds().ptr;
-        let dst: *mut VerifTy = generators[0].any_in_bounds().ptr;
-        let scratch_base: *mut VerifTy = generators[0].any_in_bounds().ptr;
-
-        unsafe {
-            sort8_stable(v_base, dst, scratch_base, &mut is_less_over_approximation);
-        }
-    }
-
-    #[kani::proof_for_contract(merge_up)]
+    #[kani::proof]
     fn check_merge_up() {
         let mut generators = [
             kani::pointer_generator::<VerifTy, SMALL_SORT_GENERAL_SCRATCH_LEN>(),
@@ -1189,10 +1155,19 @@ mod verification {
             .any_in_bounds()
             .ptr;
 
+        kani::assume(
+            kani::mem::can_dereference(left_src)
+                && kani::mem::can_dereference(right_src)
+                && kani::mem::can_write(dst)
+                && left_src != dst
+                && right_src != dst
+                && kani::mem::same_allocation(dst, dst.wrapping_add(1)),
+        );
+
         unsafe { merge_up(left_src, right_src, dst, &mut is_less_over_approximation) };
     }
 
-    #[kani::proof_for_contract(merge_down)]
+    #[kani::proof]
     fn check_merge_down() {
         let mut generators = [
             kani::pointer_generator::<VerifTy, SMALL_SORT_GENERAL_SCRATCH_LEN>(),
@@ -1208,14 +1183,23 @@ mod verification {
             .any_in_bounds()
             .ptr;
 
+        kani::assume(
+            kani::mem::can_dereference(left_src)
+                && kani::mem::can_dereference(right_src)
+                && kani::mem::can_write(dst)
+                && left_src != dst
+                && right_src != dst
+                && kani::mem::same_allocation(dst, dst.wrapping_sub(1)),
+        );
+
         unsafe { merge_down(left_src, right_src, dst, &mut is_less_over_approximation) };
     }
 
     #[kani::proof_for_contract(non_panicking_bidirectional_merge)]
     #[kani::solver(minisat)]
-    #[kani::unwind(6)]
+    #[kani::unwind(17)]
     fn check_bidirectional_merge() {
-        let arr: [VerifTy; 6] = kani::any();
+        let arr: [VerifTy; 32] = kani::any();
         let mut generator = kani::pointer_generator::<VerifTy, SMALL_SORT_GENERAL_SCRATCH_LEN>();
 
         let v = kani::slice::any_slice_of_array(&arr);
