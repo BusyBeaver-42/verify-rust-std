@@ -4,7 +4,7 @@ use crate::mem::{self, ManuallyDrop, MaybeUninit};
 use crate::slice::sort::shared::FreezeMarker;
 use crate::{intrinsics, ptr, slice};
 
-// #[cfg(kani)]
+#[cfg(kani)]
 use verification_utils::*;
 
 // It's important to differentiate between SMALL_SORT_THRESHOLD performance for
@@ -446,6 +446,8 @@ where
 /// `swap_if_less`. If the code of a sort impl changes so as to call this function in multiple
 /// places, `#[inline(never)]` is recommended to keep binary-size in check. The current design of
 /// `small_sort_network` makes sure to only call this once.
+#[kani::requires(v.len() >= 9)]
+#[kani::modifies(&v[..9])]
 fn sort9_optimal<T, F>(v: &mut [T], is_less: &mut F)
 where
     F: FnMut(&T, &T) -> bool,
@@ -495,6 +497,8 @@ where
 /// `swap_if_less`. If the code of a sort impl changes so as to call this function in multiple
 /// places, `#[inline(never)]` is recommended to keep binary-size in check. The current design of
 /// `small_sort_network` makes sure to only call this once.
+#[kani::requires(v.len() >= 13)]
+#[kani::modifies(&v[..13])]
 fn sort13_optimal<T, F>(v: &mut [T], is_less: &mut F)
 where
     F: FnMut(&T, &T) -> bool,
@@ -613,6 +617,8 @@ unsafe fn insert_tail<T, F: FnMut(&T, &T) -> bool>(begin: *mut T, tail: *mut T, 
 }
 
 /// Sort `v` assuming `v[..offset]` is already sorted.
+#[kani::requires(offset != 0 && offset <= v.len())]
+#[kani::modifies(v)]
 pub fn insertion_sort_shift_left<T, F: FnMut(&T, &T) -> bool>(
     v: &mut [T],
     offset: usize,
@@ -632,6 +638,13 @@ pub fn insertion_sort_shift_left<T, F: FnMut(&T, &T) -> bool>(
         let v_base = v.as_mut_ptr();
         let v_end = v_base.add(len);
         let mut tail = v_base.add(offset);
+        #[kani::loop_invariant(
+            tail > v_base
+                && tail < v_end
+                && kani::mem::can_dereference(v_base)
+                && kani::mem::can_dereference(tail)
+                && kani::mem::same_allocation(v_base, tail)
+        )]
         while tail != v_end {
             // SAFETY: v_base and tail are both valid pointers to elements, and
             // v_base < tail since we checked offset != 0.
@@ -929,7 +942,7 @@ pub(crate) const fn has_efficient_in_place_swap<T>() -> bool {
     mem::size_of::<T>() <= 8 // mem::size_of::<u64>()
 }
 
-// #[cfg(kani)]
+#[cfg(kani)]
 mod verification_utils {
     use super::*;
 
@@ -1056,7 +1069,7 @@ mod verification_utils {
     }
 }
 
-// #[cfg(kani)]
+#[cfg(kani)]
 mod verification {
     use super::*;
 
@@ -1075,6 +1088,26 @@ mod verification {
         }
     }
 
+    #[kani::proof_for_contract(sort9_optimal)]
+    #[kani::solver(minisat)]
+    #[kani::stub_verified(swap_if_less)]
+    fn check_sort9_optimal() {
+        let mut arr: [VerifTy; SMALL_SORT_NETWORK_SCRATCH_LEN] = kani::any();
+        let v = kani::slice::any_slice_of_array_mut(&mut arr);
+
+        sort9_optimal(v, &mut is_less_over_approximation);
+    }
+
+    #[kani::proof_for_contract(sort13_optimal)]
+    #[kani::solver(minisat)]
+    #[kani::stub_verified(swap_if_less)]
+    fn check_sort13_optimal() {
+        let mut arr: [VerifTy; SMALL_SORT_NETWORK_SCRATCH_LEN] = kani::any();
+        let v = kani::slice::any_slice_of_array_mut(&mut arr);
+
+        sort13_optimal(v, &mut is_less_over_approximation);
+    }
+
     #[kani::proof_for_contract(insert_tail)]
     #[kani::solver(minisat)]
     #[kani::unwind(32)]
@@ -1089,16 +1122,15 @@ mod verification {
         }
     }
 
-    #[kani::proof]
-    // #[kani::stub_verified(insert_tail)] // kani crashes :(
-    #[kani::unwind(10)]
+    #[kani::proof_for_contract(insertion_sort_shift_left)]
+    #[kani::solver(minisat)]
+    // #[kani::stub_verified(insert_tail)] // kani crashes :( https://github.com/model-checking/kani/issues/3799
+    #[kani::unwind(4)]
     fn check_insertion_sort_shift_left() {
-        let mut arr: [VerifTy; 10] = kani::any();
+        let mut arr: [VerifTy; 4] = kani::any();
+
         let v = kani::slice::any_slice_of_array_mut(&mut arr);
         let offset = kani::any();
-
-        kani::assume(offset != 0);
-        kani::assume(offset <= v.len());
 
         insertion_sort_shift_left(v, offset, &mut is_less_over_approximation);
     }
@@ -1121,23 +1153,23 @@ mod verification {
         }
     }
 
-    // #[kani::proof_for_contract(sort8_stable)]
-    // // #[kani::stub(bidirectional_merge, non_panicking_bidirectional_merge)] // kani crashes :(
-    // // #[kani::stub_verified(non_panicking_bidirectional_merge, sort4_stable)] // https://github.com/model-checking/kani/issues/3804
-    // // #[kani::stub_verified(sort4_stable)] // kani crashes :(
-    // fn check_sort8_stable() {
-    //     let mut generators = [kani::pointer_generator::<VerifTy, SMALL_SORT_GENERAL_SCRATCH_LEN>(),
-    //     kani::pointer_generator::<VerifTy, SMALL_SORT_GENERAL_SCRATCH_LEN>(),
-    //     kani::pointer_generator::<VerifTy, SMALL_SORT_GENERAL_SCRATCH_LEN>()];
-    //
-    //     let v_base: *mut VerifTy = generators[0].any_in_bounds().ptr;
-    //     let dst: *mut VerifTy = generators[0].any_in_bounds().ptr;
-    //     let scratch_base: *mut VerifTy = generators[0].any_in_bounds().ptr;
-    //
-    //     unsafe {
-    //         sort8_stable(v_base, dst, scratch_base, &mut is_less_over_approximation);
-    //     }
-    // }
+    #[kani::proof_for_contract(sort8_stable)]
+    // #[kani::stub(bidirectional_merge, non_panicking_bidirectional_merge)] // kani crashes :( https://github.com/model-checking/kani/issues/3799
+    // #[kani::stub_verified(non_panicking_bidirectional_merge, sort4_stable)] // https://github.com/model-checking/kani/issues/3804
+    // #[kani::stub_verified(sort4_stable)] // kani crashes :( https://github.com/model-checking/kani/issues/3799
+    fn check_sort8_stable() {
+        let mut generators = [kani::pointer_generator::<VerifTy, SMALL_SORT_GENERAL_SCRATCH_LEN>(),
+        kani::pointer_generator::<VerifTy, SMALL_SORT_GENERAL_SCRATCH_LEN>(),
+        kani::pointer_generator::<VerifTy, SMALL_SORT_GENERAL_SCRATCH_LEN>()];
+
+        let v_base: *mut VerifTy = generators[0].any_in_bounds().ptr;
+        let dst: *mut VerifTy = generators[0].any_in_bounds().ptr;
+        let scratch_base: *mut VerifTy = generators[0].any_in_bounds().ptr;
+
+        unsafe {
+            sort8_stable(v_base, dst, scratch_base, &mut is_less_over_approximation);
+        }
+    }
 
     #[kani::proof]
     fn check_merge_up() {
