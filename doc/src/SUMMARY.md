@@ -8,7 +8,8 @@
 
 - [Verification Tools](./tools.md)
   - [Kani](./tools/kani.md)
-
+  - [GOTO Transcoder](./tools/goto-transcoder.md)
+  - [VeriFast](./tools/verifast.md)
 
 ---
 
@@ -27,3 +28,4 @@
   - [12: Safety of `NonZero`](./challenges/0012-nonzero.md)
   - [13: Safety of `CStr`](./challenges/0013-cstr.md)
   - [14: Safety of Primitive Conversions](./challenges/0014-convert-num.md)
+  - [15: Contracts and Tests for SIMD Intrinsics](./challenges/0015-intrinsics-simd.md)
