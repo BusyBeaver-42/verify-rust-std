@@ -1193,7 +1193,6 @@ mod verification {
                 && kani::mem::can_write(dst)
                 && left_src != dst
                 && right_src != dst
-                && kani::mem::same_allocation(dst, dst.wrapping_add(1)),
         );
 
         unsafe { merge_up(left_src, right_src, dst, &mut is_less_over_approximation) };
